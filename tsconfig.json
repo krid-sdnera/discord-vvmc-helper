@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "sourceMap": true,
+    "types": ["node"],
+    "typeRoots": [
+      // add path to @types
+      "node_modules/@types",
+      "node_modules/discord.js/typings"
+    ]
+  },
+  "exclude": ["node_modules"]
+}
