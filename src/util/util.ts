@@ -1,3 +1,5 @@
+import { Message } from "discord.js";
+
 export async function timer(fn, seconds) {
   await fn();
   setInterval(() => fn(), seconds * 1000);
@@ -20,4 +22,9 @@ export async function backOff(fn, level = 0) {
       return await backOff(fn, level + 1);
     }
   }
+}
+
+export async function autoDelete(message: Promise<Message>) {
+  const awaitedMessage = await message;
+  setTimeout(() => awaitedMessage.delete(), 10 * 1000);
 }

@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model MinecraftPlayer {
+  id     Int    @id @default(autoincrement())
+  name   String @db.VarChar(256)
+  uuid   String @db.VarChar(256)
+  oper   String @db.VarChar(256)
+  time   String @db.VarChar(256)
+  User   User?  @relation(fields: [userId], references: [id])
+  userId Int?
+}
+
+model DiscordMember {
+  id        Int     @id @default(autoincrement())
+  discordId String  @db.VarChar(256)
+  nickname  String? @db.VarChar(256)
+  User      User[]
+}
+
+model ScoutMember {
+  id               Int    @id @default(autoincrement())
+  membershipNumber String @db.VarChar(256)
+  firstname        String @db.VarChar(256)
+  lastname         String @db.VarChar(256)
+  User             User[]
+}
+
+model User {
+  id              Int               @id @default(autoincrement())
+  email           String?
+  minecraftPlayer MinecraftPlayer[]
+  scoutMember     ScoutMember?      @relation(fields: [scoutMemberId], references: [id])
+  scoutMemberId   Int?
+  discordMember   DiscordMember?    @relation(fields: [discordMemberId], references: [id])
+  discordMemberId Int?
+}
