@@ -72,6 +72,13 @@ const commands = [
     .addIntegerOption((option) =>
       option.setName("page").setDescription("Display the first rule")
     ),
+  new SlashCommandBuilder()
+    .setName("run-as")
+    .setDescription("For admin use only")
+    .addUserOption((option) =>
+      option.setName("user").setDescription("The user to run a command as")
+    )
+    .setDefaultPermission(false),
 ].map((command) => command.toJSON());
 
 const testingcommands = [].map((command) => command.toJSON());
@@ -110,7 +117,7 @@ export class DiscordManager {
       } catch (e) {
         try {
           if (interaction.isButton() || interaction.isCommand()) {
-            interaction.followUp(this.makeError(e));
+            await interaction.followUp(this.makeError(e));
           } else {
             console.error("Fatal Error:");
             console.error(e);
@@ -121,44 +128,40 @@ export class DiscordManager {
         }
       }
     });
-    this.client.on("ready", (client) => {
+    this.client.on("ready", async (client) => {
       console.info(`Logged in as ${this.client.user.tag}!`);
 
-      const rest = new REST({ version: "9" }).setToken(this.token);
+      const globalCommands = await client.application.commands.set(
+        commands as any
+      );
 
-      // try {
-      //   await rest.put(
-      //     Routes.applicationGuildCommands(
-      //       process.env.CLIENTID,
-      //       process.env.GUILDID
-      //     ),
-      //     { body: commands }
-      //   );
+      const guildCommands = await client.application.commands.set(
+        testingcommands as any,
+        process.env.GUILDID
+      );
 
-      //   console.log("Successfully registered application guild commands.");
-      // } catch (error) {
-      //   console.error(error);
-      // }
+      const commandPermissions = {
+        "run-as": {
+          roleName: "Discord Moderator",
+        },
+      };
 
-      // try {
-      //   await rest.put(Routes.applicationCommands(process.env.CLIENTID), {
-      //     body: commands,
-      //   });
-
-      //   console.log("Successfully registered application commands.");
-      // } catch (error) {
-      //   console.error(error);
-      // }
-
-      client.application.commands
-        .set(commands as any)
-        .catch((x) => console.error(x))
-        .then((x) => console.log(x));
-
-      client.application.commands
-        .set(testingcommands as any, process.env.GUILDID)
-        .catch((x) => console.error(x))
-        .then((x) => console.log(x));
+      globalCommands.concat(guildCommands).forEach(async (command) => {
+        if (Object.keys(commandPermissions).includes(command.name)) {
+          const guild = await client.guilds.fetch(process.env.GUILDID);
+          await guild.roles.fetch();
+          const role = guild.roles.cache.find(
+            (role) => role.name === commandPermissions[command.name].roleName
+          );
+          if (!role) {
+            return;
+          }
+          await command.permissions.set({
+            permissions: [{ id: role.id, type: 1, permission: true }],
+            guild: guild.id,
+          });
+        }
+      });
     });
     const loginRes = await this.client.login(this.token);
     console.timeEnd("[bot:manager] authenticate with discord");
@@ -167,7 +170,18 @@ export class DiscordManager {
 
   optionsArrayToObject<T>(options: readonly CommandInteractionOption[]): T {
     return options.reduce((acc, option) => {
-      acc[option.name] = String(option.value);
+      if (option.type === "STRING") {
+        acc[option.name] = String(option.value);
+      }
+      if (option.type === "BOOLEAN") {
+        acc[option.name] = Boolean(option.value);
+      }
+      if (option.type === "INTEGER") {
+        acc[option.name] = Number(option.value);
+      }
+      if (option.type === "USER") {
+        acc[option.name] = option.user;
+      }
       return acc;
     }, {} as T);
   }
@@ -175,6 +189,7 @@ export class DiscordManager {
   makeError(error: Error | AppError): string {
     const msg = `lol, gib this to Dirk \`${btoa(JSON.stringify(error))}\``;
     console.error(msg);
+    console.error(error);
     return msg;
   }
 
@@ -197,6 +212,8 @@ export class DiscordManager {
       await this.processCommandDynmap(interaction);
     } else if (interaction.commandName === "rules") {
       await this.processCommandRules(interaction);
+    } else if (interaction.commandName === "run-as") {
+      await this.processCommandRunAs(interaction);
     }
   }
 
@@ -437,40 +454,39 @@ export class DiscordManager {
     await this.updateMember(interaction);
   }
 
-  // async assumeMember(
-  //   message: Message
-  // ): Promise<{ assumedMember: GuildMember; msgPartial: string }> {
-  //   if (message.content.trim().match(/as \<\@\!\d+\>$/)) {
-  //     if (message.mentions.members) {
-  //       let lastMention: GuildMember | null = null;
-  //       message.mentions.members.mapValues((m) => (lastMention = m));
+  async processCommandRunAs(interaction: CommandInteraction) {
+    console.time("[bot:manager:message] run as message");
+    interface CommandRunAsOptions {
+      user?: GuildMember;
+    }
+    const options = this.optionsArrayToObject<CommandRunAsOptions>(
+      interaction.options.data
+    );
 
-  //       await autoDelete(
-  //         message.channel.send(`assuming user ${lastMention.displayName}`)
-  //       );
+    this.manager.setDiscordIdRunAs(
+      interaction.member.user.id,
+      options.user?.id ?? null
+    );
 
-  //       return {
-  //         assumedMember: lastMention,
-  //         msgPartial: ` as <@!${lastMention.id}>`,
-  //       };
-  //     }
-  //   }
-  //   return {
-  //     assumedMember: message.member,
-  //     msgPartial: ` as <@!${message.member.id}>`,
-  //   };
-  // }
+    await interaction.reply({ content: "okie", ephemeral: true });
+    console.timeEnd("[bot:manager:message] run as message");
+  }
 
   async updateMember(interaction: ButtonInteraction | CommandInteraction) {
     console.time("[bot:manager:member] update nickname");
 
-    const { nickname, roles } = await this.manager.fetchRoleAndNickname({
+    const { id, nickname, roles } = await this.manager.fetchRoleAndNickname({
       discord: { id: interaction.member.user.id },
     });
 
+    let member = interaction.member;
+    if (id !== member.user.id) {
+      member = await interaction.guild.members.fetch({ user: id });
+    }
+
     if (nickname) {
       try {
-        await this.updateNickname(interaction.member as GuildMember, nickname);
+        await this.updateNickname(member as GuildMember, nickname);
       } catch (e) {
         console.log(`failed to update nickname: "${nickname}"`);
 
@@ -481,6 +497,19 @@ export class DiscordManager {
           ephemeral: true,
         });
       }
+    }
+
+    // Set the Discord member's roles.
+    try {
+      await this.updateRoles(member as GuildMember, roles);
+    } catch (e) {
+      console.log(`failed to update roles: "${JSON.stringify(roles)}"`);
+
+      await interaction.followUp({
+        content:
+          "I don't have permission to change your roles!" + this.makeError(e),
+        ephemeral: true,
+      });
     }
 
     console.timeEnd("[bot:manager:member] update nickname");
@@ -508,6 +537,56 @@ export class DiscordManager {
       throw new AppError(
         `Failed to update Discord nickname 0x01`,
         AppErrorCode.UnknownError
+      );
+    }
+  }
+
+  async updateRoles(member: GuildMember, roles: string[]) {
+    let code = "";
+    try {
+      if (!member.guild.me.permissions.has("MANAGE_ROLES", true)) {
+        throw new AppError(
+          `Failed to update Discord role 0x03`,
+          AppErrorCode.UnknownError
+        );
+      }
+
+      const managedRoleNames = [
+        "Leader",
+        "Rover",
+        "Venturer",
+        "Scout",
+        "Verified",
+      ];
+
+      member.guild.roles.fetch();
+      member.roles.cache;
+
+      const discordRolesToAdd = member.guild.roles.cache
+        .filter((role) => managedRoleNames.includes(role.name))
+        .filter((role) => !member.roles.cache.has(role.id))
+        .filter((role) => roles.includes(role.name));
+      const discordRolesToRemove = member.guild.roles.cache
+        .filter((role) => managedRoleNames.includes(role.name))
+        .filter((role) => member.roles.cache.has(role.id))
+        .filter((role) => !roles.includes(role.name));
+
+      console.log(
+        "Adding these roles",
+        discordRolesToAdd.map((role) => role.name)
+      );
+      console.log(
+        "Removing these roles",
+        discordRolesToRemove.map((role) => role.name)
+      );
+
+      await member.roles.add(discordRolesToAdd);
+      await member.roles.remove(discordRolesToRemove);
+    } catch (e) {
+      throw new AppError(
+        `Failed to update Discord role 0x01`,
+        AppErrorCode.UnknownError,
+        e
       );
     }
   }

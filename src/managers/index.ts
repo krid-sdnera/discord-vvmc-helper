@@ -32,6 +32,29 @@ export class BotManager {
     console.timeEnd("[bot:manager] request managers begin listening");
   }
 
+  discordIdOverride: Record<string, string> = {};
+
+  setDiscordIdRunAs(id: string, runAsId: string | null) {
+    if (runAsId === null) {
+      delete this.discordIdOverride[id];
+    } else {
+      this.discordIdOverride[id] = runAsId;
+    }
+    console.log("setDiscordIdRunAs", this.discordIdOverride);
+  }
+
+  resolveDiscordId(id): string {
+    console.log("resolveDiscordId", this.discordIdOverride);
+    return this.discordIdOverride[id] ?? id;
+  }
+
+  resolveUserContext(userContext: AppUserContext): AppUserContext {
+    if (userContext.discord) {
+      userContext.discord.id = this.resolveDiscordId(userContext.discord.id);
+    }
+    return userContext;
+  }
+
   async verifyExtranet(
     scoutMember: {
       membershipNumber: string;
@@ -54,7 +77,11 @@ export class BotManager {
       throw e;
     }
 
-    await this.db.recordVerification(scoutMember, extrnetDetail, userContext);
+    await this.db.recordVerification(
+      scoutMember,
+      extrnetDetail,
+      this.resolveUserContext(userContext)
+    );
 
     timerEnd();
     return extrnetDetail;
@@ -65,15 +92,18 @@ export class BotManager {
     userContext: AppUserContext
   ) {
     const timerEnd = this.logger.time("debug", "linking scouting member");
-    await this.db.recordMinecraftUsername(minecraft, userContext);
+    await this.db.recordMinecraftUsername(
+      minecraft,
+      this.resolveUserContext(userContext)
+    );
 
     timerEnd();
   }
 
   async fetchRoleAndNickname(
     userContext: AppUserContext
-  ): Promise<{ nickname: string | null; roles: string[] }> {
-    const user = await this.db.fetchUser(userContext);
+  ): Promise<{ id: string; nickname: string | null; roles: string[] }> {
+    const user = await this.db.fetchUser(this.resolveUserContext(userContext));
 
     const roles: string[] = [];
 
@@ -83,10 +113,26 @@ export class BotManager {
 
     const details = user.scoutMember?.details as unknown as MemberRecord;
     if (details?.detail?.ClassID) {
-      console.log("class id", details.detail.ClassID);
+      const classIdToRoleMapping = {
+        LDR: "Leader",
+        ROVER: "Rover",
+        VENT: "Venturer",
+        SCOUT: "Scout",
+      };
+      const mappedRole = classIdToRoleMapping[details.detail.ClassID];
+      if (mappedRole) {
+        roles.push(mappedRole);
+      } else {
+        console.log("class id", details.detail.ClassID);
+        roles.push("Unmatched section");
+      }
     }
 
-    return { nickname: this.getNickname(user), roles };
+    return {
+      id: this.resolveDiscordId(userContext.discord.id),
+      nickname: this.getNickname(user),
+      roles,
+    };
   }
 
   getNickname(user: UserEntity): string | null {
@@ -113,15 +159,18 @@ export class BotManager {
     discord: { nickname: string },
     userContext: AppUserContext
   ) {
-    await this.db.setDiscordNickname(discord.nickname, userContext);
+    await this.db.setDiscordNickname(
+      discord.nickname,
+      this.resolveUserContext(userContext)
+    );
   }
 
   async hasAcceptedRules(userContext: AppUserContext): Promise<boolean> {
-    return await this.db.hasAcceptedRules(userContext);
+    return await this.db.hasAcceptedRules(this.resolveUserContext(userContext));
   }
 
   async recordRuleAcceptance(userContext: AppUserContext) {
-    await this.db.recordRuleAcceptance(userContext);
+    await this.db.recordRuleAcceptance(this.resolveUserContext(userContext));
   }
 
   async listUsers(options: ListUsersOptions): Promise<UserEntity[]> {
