@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider          = "mysql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model MinecraftPlayer {
@@ -29,12 +30,14 @@ model ScoutMember {
   membershipNumber String @db.VarChar(256)
   firstname        String @db.VarChar(256)
   lastname         String @db.VarChar(256)
+  details          Json   @db.Json
   User             User[]
 }
 
 model User {
   id              Int               @id @default(autoincrement())
   email           String?
+  agreeToRules    Boolean           @default(false)
   minecraftPlayer MinecraftPlayer[]
   scoutMember     ScoutMember?      @relation(fields: [scoutMemberId], references: [id])
   scoutMemberId   Int?

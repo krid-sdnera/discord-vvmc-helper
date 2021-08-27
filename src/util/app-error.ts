@@ -3,12 +3,17 @@ export enum AppErrorCode {
   ExtranetMemberNotVerified = "ExtranetMemberNotVerified",
   DatabaseNoResults = "DatabaseNoResults",
   ActionUnsupported = "ActionUnsupported",
+  UserDisagreesWithRules = "UserDisagreesWithRules",
+  UserCreationFailed = "UserCreationFailed",
+  UnknownError = "UnknownError",
 }
 
 export class AppError extends Error {
   code: AppErrorCode;
-  constructor(msg: string, code: AppErrorCode) {
+  previous?: Error;
+  constructor(msg: string, code: AppErrorCode, previous?: Error) {
     super(msg);
     this.code = code;
+    this.previous = previous;
   }
 }

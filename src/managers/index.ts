@@ -1,5 +1,5 @@
 import { Logger } from "../util/logger";
-import { DatabaseManager, ListUsersOptions } from "./database";
+import { DatabaseManager, ListUsersOptions, UserEntity } from "./database";
 import { DiscordManager } from "./discord";
 import { ExtranetManager, MemberRecord } from "./extranet";
 import { WebManager } from "./web";
@@ -30,17 +30,6 @@ export class BotManager {
     console.time("[bot:manager] request managers begin listening");
     await Promise.all([this.discord.listen(), this.web.listen()]);
     console.timeEnd("[bot:manager] request managers begin listening");
-
-    // await this.db.recordVerification(
-    //   {
-    //     membershipNumber: "8036229",
-    //     firstname: "Dirk",
-    //     lastname: "Arends",
-    //   },
-    //   {} as any,
-    //   // { email: "dirk@arends.com.au" }
-    //   { discord: { id: "242265323636523010" } }
-    // );
   }
 
   async verifyExtranet(
@@ -81,10 +70,43 @@ export class BotManager {
     timerEnd();
   }
 
-  async fetchNickname(userContext: AppUserContext): Promise<string> {
-    const nickname = await this.db.fetchNickname(userContext);
+  async fetchRoleAndNickname(
+    userContext: AppUserContext
+  ): Promise<{ nickname: string | null; roles: string[] }> {
+    const user = await this.db.fetchUser(userContext);
 
-    return nickname;
+    const roles: string[] = [];
+
+    if (user.agreeToRules && user.scoutMember) {
+      roles.push("Verified");
+    }
+
+    const details = user.scoutMember?.details as unknown as MemberRecord;
+    if (details?.detail?.ClassID) {
+      console.log("class id", details.detail.ClassID);
+    }
+
+    return { nickname: this.getNickname(user), roles };
+  }
+
+  getNickname(user: UserEntity): string | null {
+    const nickname: string[] = [];
+
+    if (user.discordMember?.nickname) {
+      nickname.push(user.discordMember.nickname);
+    } else if (user.scoutMember?.firstname) {
+      nickname.push(user.scoutMember.firstname);
+    }
+
+    if (user.minecraftPlayer.length > 0) {
+      nickname.push(user.minecraftPlayer.map((mc) => mc.name).join(","));
+    }
+
+    if (nickname.length === 0) {
+      return null;
+    }
+
+    return nickname.join(" | ");
   }
 
   async recordDiscordNickname(
@@ -94,7 +116,15 @@ export class BotManager {
     await this.db.setDiscordNickname(discord.nickname, userContext);
   }
 
-  async listUsers(options: ListUsersOptions) {
+  async hasAcceptedRules(userContext: AppUserContext): Promise<boolean> {
+    return await this.db.hasAcceptedRules(userContext);
+  }
+
+  async recordRuleAcceptance(userContext: AppUserContext) {
+    await this.db.recordRuleAcceptance(userContext);
+  }
+
+  async listUsers(options: ListUsersOptions): Promise<UserEntity[]> {
     return this.db.listUsers(options);
   }
 }

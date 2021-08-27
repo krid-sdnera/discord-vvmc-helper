@@ -4,8 +4,8 @@ import {
   PrismaClient,
   ScoutMember,
   User,
+  Prisma,
 } from "@prisma/client";
-import e from "express";
 import { AppUserContext, BotManager } from ".";
 import { AppError, AppErrorCode } from "../util/app-error";
 import { Logger } from "../util/logger";
@@ -15,6 +15,12 @@ export interface ListUsersOptions {
   page: number;
   perPage: number;
 }
+
+export type UserEntity = User & {
+  scoutMember?: ScoutMember;
+  discordMember?: DiscordMember;
+  minecraftPlayer: MinecraftPlayer[];
+};
 
 export class DatabaseManager {
   private prisma: PrismaClient;
@@ -28,20 +34,31 @@ export class DatabaseManager {
     console.timeEnd("[bot:manager:database] initialise");
   }
 
-  async recordVerification(
-    scoutMember: {
-      membershipNumber: string;
-      firstname: string;
-      lastname: string;
-    },
-    extrnetDetail: MemberRecord,
-    userContext: AppUserContext
-  ) {
-    const userEnd = this.logger.time("debug", "Fetch User");
-    let user:
-      | (User & { scoutMember?: ScoutMember; discordMember?: DiscordMember })
-      | null = null;
+  async fetchUser(
+    userContext: AppUserContext,
+    opts?: {
+      requireAcceptedRules?: boolean;
+      createUser?: boolean;
+      updateIdentifiers?: boolean;
+      fallback?: { scoutMembershipNumber?: string };
+    }
+  ): Promise<UserEntity> {
+    const options = Object.assign(
+      {
+        requireAcceptedRules: false,
+        createUser: true,
+        updateIdentifiers: true,
+        fallback: {},
+      },
+      opts
+    );
+    const userEnd = this.logger.time(
+      "debug",
+      `Fetch User ${JSON.stringify(userContext)}`
+    );
+    let user: UserEntity | null = null;
     if (userContext.email) {
+      // Find user by email.
       user = await this.prisma.user.findFirst({
         where: {
           email: userContext.email,
@@ -49,9 +66,11 @@ export class DatabaseManager {
         include: {
           scoutMember: true,
           discordMember: true,
+          minecraftPlayer: true,
         },
       });
     } else if (userContext.discord) {
+      // Find user by Discord ID
       user = await this.prisma.user.findFirst({
         where: {
           discordMember: { discordId: userContext.discord.id },
@@ -59,62 +78,76 @@ export class DatabaseManager {
         include: {
           scoutMember: true,
           discordMember: true,
+          minecraftPlayer: true,
         },
       });
     }
 
-    if (!user) {
-      // check for existing members with the same membership number linked.
+    if (!user && options?.fallback?.scoutMembershipNumber) {
+      // Check for existing members with the same membership number linked.
       user = await this.prisma.user.findFirst({
         where: {
-          scoutMember: { membershipNumber: scoutMember.membershipNumber },
-        },
-        include: {
-          scoutMember: true,
-          discordMember: true,
-        },
-      });
-    }
-
-    userEnd();
-
-    if (!user) {
-      const userCreateEnd = this.logger.time("debug", "Create User");
-      user = await this.prisma.user.create({
-        data: {
-          discordMember: userContext.discord
-            ? {
-                create: {
-                  discordId: userContext.discord.id,
-                  nickname: null,
-                },
-              }
-            : undefined,
-          email: userContext.email || null,
           scoutMember: {
-            create: {
-              membershipNumber: scoutMember.membershipNumber,
-              firstname: scoutMember.firstname,
-              lastname: scoutMember.lastname,
-            },
+            membershipNumber: options.fallback.scoutMembershipNumber,
           },
         },
         include: {
           scoutMember: true,
           discordMember: true,
+          minecraftPlayer: true,
         },
       });
-      userCreateEnd();
-      return;
     }
 
-    const userUpdateEnd = this.logger.time("debug", "Update User");
+    if (!user && options.createUser) {
+      // Create user if enabled
+      const userCreateEnd = this.logger.time(
+        "debug",
+        `Create User ${JSON.stringify(userContext)}`
+      );
+      try {
+        user = await this.prisma.user.create({
+          data: {
+            discordMember: userContext.discord
+              ? {
+                  create: {
+                    discordId: userContext.discord.id,
+                    nickname: null,
+                  },
+                }
+              : undefined,
+            email: userContext.email || null,
+          },
+          include: {
+            scoutMember: true,
+            discordMember: true,
+            minecraftPlayer: true,
+          },
+        });
+      } catch (e) {
+        throw new AppError(
+          "Unable to create user",
+          AppErrorCode.UserCreationFailed,
+          e
+        );
+      } finally {
+        userCreateEnd();
+      }
+    } else if (!user) {
+      userEnd();
+      throw new AppError("No user found", AppErrorCode.DatabaseNoResults);
+    }
 
-    if (userContext.discord?.id) {
+    // A user WILL be loaded at this stage. (or we will have exited early)
+
+    if (options.updateIdentifiers) {
       // If the user was created by email, and now has been matched by scout membership number.
       // Make sure the discord member is recorded.
-      if (userContext.discord.id !== user.discordMember?.discordId) {
-        await this.prisma.user.update({
+      if (
+        userContext.discord?.id &&
+        userContext.discord.id !== user.discordMember?.discordId
+      ) {
+        user = await this.prisma.user.update({
           where: { id: user.id },
           data: {
             discordMember: {
@@ -132,33 +165,72 @@ export class DatabaseManager {
           include: {
             scoutMember: true,
             discordMember: true,
+            minecraftPlayer: true,
           },
         });
       }
-    }
-    if (userContext.email) {
+
       // If the user was created by discord, and now has been matched by scout membership number.
       // Make sure the email is recorded.
-      if (userContext.email !== user.email) {
+      if (userContext.email && userContext.email !== user.email) {
         user = await this.prisma.user.update({
           where: { id: user.id },
           data: { email: userContext.email },
           include: {
             scoutMember: true,
             discordMember: true,
+            minecraftPlayer: true,
           },
         });
       }
     }
 
-    this.prisma.user.update({
+    if (options.requireAcceptedRules && !user.agreeToRules) {
+      userEnd();
+      throw new AppError(
+        "User has not accpeted the rules",
+        AppErrorCode.UserDisagreesWithRules
+      );
+    }
+
+    userEnd();
+    return user;
+  }
+
+  async recordVerification(
+    scoutMember: {
+      membershipNumber: string;
+      firstname: string;
+      lastname: string;
+    },
+    extrnetDetail: MemberRecord,
+    userContext: AppUserContext
+  ) {
+    const user = await this.fetchUser(userContext, {
+      fallback: { scoutMembershipNumber: scoutMember.membershipNumber },
+      requireAcceptedRules: false,
+    });
+
+    console.log(extrnetDetail);
+
+    const userUpdateEnd = this.logger.time("debug", "Update User");
+    await this.prisma.user.update({
       where: { id: user.id },
       data: {
         scoutMember: {
-          update: {
-            membershipNumber: scoutMember.membershipNumber,
-            firstname: scoutMember.firstname,
-            lastname: scoutMember.lastname,
+          upsert: {
+            create: {
+              membershipNumber: scoutMember.membershipNumber,
+              firstname: scoutMember.firstname,
+              lastname: scoutMember.lastname,
+              details: extrnetDetail as unknown as Prisma.InputJsonValue,
+            },
+            update: {
+              membershipNumber: scoutMember.membershipNumber,
+              firstname: scoutMember.firstname,
+              lastname: scoutMember.lastname,
+              details: extrnetDetail as unknown as Prisma.InputJsonValue,
+            },
           },
         },
       },
@@ -168,42 +240,16 @@ export class DatabaseManager {
 
   async recordMinecraftUsername(
     minecraft: { minecraftUsername: string },
-
     userContext: AppUserContext
   ) {
-    const userEnd = this.logger.time("debug", "Fetch User");
-    let user: (User & { minecraftPlayer: MinecraftPlayer[] }) | null = null;
-    if (userContext.email) {
-      user = await this.prisma.user.findFirst({
-        where: {
-          email: userContext.email,
-        },
-        include: {
-          minecraftPlayer: true,
-        },
-      });
-    } else if (userContext.discord) {
-      user = await this.prisma.user.findFirst({
-        where: {
-          discordMember: { discordId: userContext.discord.id },
-        },
-        include: {
-          minecraftPlayer: true,
-        },
-      });
-    }
-    userEnd();
-
-    if (!user) {
-      throw new AppError(
-        "Unable to link minecraft player: No user found",
-        AppErrorCode.DatabaseNoResults
-      );
-    }
+    const user = await this.fetchUser(userContext, {
+      requireAcceptedRules: true,
+    });
 
     const userUpdateEnd = this.logger.time("debug", "Update User");
     const minecraftRecord = user.minecraftPlayer.find(
-      (mc: MinecraftPlayer) => mc.name === minecraft.minecraftUsername
+      (mc: MinecraftPlayer) =>
+        mc.name.toLowerCase() === minecraft.minecraftUsername.toLowerCase()
     );
 
     await this.prisma.user.update({
@@ -232,86 +278,10 @@ export class DatabaseManager {
     userUpdateEnd();
   }
 
-  async fetchNickname(userContext: AppUserContext) {
-    const userEnd = this.logger.time("debug", "Fetch User");
-    let user:
-      | (User & {
-          minecraftPlayer: MinecraftPlayer[];
-          scoutMember?: ScoutMember;
-          discordMember?: DiscordMember;
-        })
-      | null = null;
-    if (userContext.email) {
-      throw new AppError(
-        "Fetching nickname by email is unsupported",
-        AppErrorCode.ActionUnsupported
-      );
-    } else if (userContext.discord) {
-      user = await this.prisma.user.findFirst({
-        where: {
-          discordMember: { discordId: userContext.discord.id },
-        },
-        include: {
-          minecraftPlayer: true,
-          scoutMember: true,
-          discordMember: true,
-        },
-      });
-    }
-    userEnd();
-
-    if (!user) {
-      throw new AppError(
-        "Unable to fetch nickname: No user found",
-        AppErrorCode.DatabaseNoResults
-      );
-    }
-
-    const nickname: string[] = [];
-
-    if (user.discordMember.nickname) {
-      nickname.push(user.discordMember.nickname);
-    } else if (user.scoutMember.firstname) {
-      nickname.push(user.scoutMember.firstname);
-    }
-
-    if (user.minecraftPlayer.length > 0) {
-      nickname.push(user.minecraftPlayer.map((mc) => mc.name).join(","));
-    }
-
-    if (nickname.length === 0) {
-      return null;
-    }
-
-    return nickname.join(" | ");
-  }
-
   async setDiscordNickname(nickname: string, userContext: AppUserContext) {
-    const userEnd = this.logger.time("debug", "Fetch User");
-    let user: (User & { discordMember: DiscordMember }) | null = null;
-    if (userContext.email) {
-      throw new AppError(
-        "Fetching nickname by email is unsupported",
-        AppErrorCode.ActionUnsupported
-      );
-    } else if (userContext.discord) {
-      user = await this.prisma.user.findFirst({
-        where: {
-          discordMember: { discordId: userContext.discord.id },
-        },
-        include: {
-          discordMember: true,
-        },
-      });
-    }
-    userEnd();
-
-    if (!user) {
-      throw new AppError(
-        "Unable to update discord nickname: No user found",
-        AppErrorCode.DatabaseNoResults
-      );
-    }
+    const user = await this.fetchUser(userContext, {
+      requireAcceptedRules: true,
+    });
 
     const userUpdateEnd = this.logger.time("debug", "Update User");
     await this.prisma.user.update({
@@ -329,7 +299,32 @@ export class DatabaseManager {
     userUpdateEnd();
   }
 
-  async listUsers(options: ListUsersOptions) {
+  async recordRuleAcceptance(userContext: AppUserContext) {
+    const user = await this.fetchUser(userContext, {
+      requireAcceptedRules: false,
+    });
+
+    const userUpdateEnd = this.logger.time("debug", "Update User");
+    await this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        agreeToRules: true,
+      },
+    });
+    userUpdateEnd();
+  }
+
+  async hasAcceptedRules(userContext: AppUserContext): Promise<boolean> {
+    const user = await this.fetchUser(userContext, {
+      requireAcceptedRules: false,
+    });
+
+    return user.agreeToRules;
+  }
+
+  async listUsers(options: ListUsersOptions): Promise<UserEntity[]> {
     return await this.prisma.user.findMany({
       skip: (options.page - 1) * options.perPage,
       take: options.perPage,
