@@ -97,8 +97,8 @@ export class ExtranetManager {
         {
           params: {
             memberRegid: rego,
-            memberFirstname: firstname.replace(" ", "+"),
-            memberSurname: lastname.replace(" ", "+"),
+            memberFirstname: firstname.replace(" ", "+").replace("'", "_"),
+            memberSurname: lastname.replace(" ", "+").replace("'", "_"),
           },
         }
       );
