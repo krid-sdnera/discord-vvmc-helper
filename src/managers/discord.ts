@@ -10,7 +10,7 @@ import {
   MessageActionRow,
   MessageButton,
 } from "discord.js";
-import { BotManager } from ".";
+import { AppUserContext, BotManager } from ".";
 import { AppError, AppErrorCode } from "../util/app-error";
 import { Logger } from "../util/logger";
 import { MemberRecord } from "./extranet";
@@ -26,19 +26,49 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName("rego")
-        .setDescription("Your Scout Membership number")
+        .setDescription(
+          "Your Scout Membership number (used to verify with Scouts Victoria)"
+        )
         .setRequired(true)
     )
     .addStringOption((option) =>
       option
         .setName("firstname")
-        .setDescription("Your firstname")
+        .setDescription("Your firstname (used to verify with Scouts Victoria)")
         .setRequired(true)
     )
     .addStringOption((option) =>
       option
         .setName("lastname")
-        .setDescription("Your lastname")
+        .setDescription("Your lastname (used to verify with Scouts Victoria)")
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("nickname")
+        .setDescription(
+          "Your nickname (to display in discord, eg: Benjamin -> Ben)"
+        )
+        .setRequired(false)
+    )
+    .addStringOption((option) =>
+      option
+        .setName("minecraftusername")
+        .setDescription("Your minecraft username")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("link-discord")
+    .setDescription(
+      "Link your Discord account with your Scouts Membership number if you've used our website to verify."
+    )
+    .addStringOption((option) =>
+      option
+        .setName("rego")
+        .setDescription(
+          "Your Scout Membership number (used to verify with Scouts Victoria)"
+        )
         .setRequired(true)
     ),
   new SlashCommandBuilder()
@@ -47,7 +77,7 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName("username")
-        .setDescription("Your Scout Membership number")
+        .setDescription("Your minecraft username")
         .setRequired(true)
     ),
   new SlashCommandBuilder()
@@ -200,6 +230,8 @@ export class DiscordManager {
 
     if (interaction.commandName === "verify") {
       await this.processCommandVerify(interaction);
+    } else if (interaction.commandName === "link-discord") {
+      await this.processCommandLinkDiscord(interaction);
     } else if (interaction.commandName === "minecraft") {
       await this.processCommandMinecraft(interaction);
     } else if (interaction.commandName === "nickname") {
@@ -246,7 +278,7 @@ export class DiscordManager {
 
   async processCommandIP(interaction: CommandInteraction) {
     console.time("[bot:manager:message] ip");
-    interaction.reply(`The minecraft server's IP is \`play.vicvents-mc.ga\``);
+    interaction.reply(`The minecraft server's IP is \`play.vicvents-mc.tk\``);
     console.timeEnd("[bot:manager:message] ip");
   }
 
@@ -259,7 +291,7 @@ export class DiscordManager {
           new MessageButton()
             .setLabel("Take me there")
             .setStyle("LINK")
-            .setURL("https://map.vicvents-mc.ga/")
+            .setURL("https://map.vicvents-mc.tk/")
         ),
       ],
     });
@@ -289,7 +321,7 @@ export class DiscordManager {
         new MessageButton()
           .setLabel("Take me there")
           .setStyle("LINK")
-          .setURL("https://vicvents-mc.ga/rules")
+          .setURL("https://vicvents-mc.tk/rules")
       ),
       new MessageActionRow().addComponents(
         new MessageButton()
@@ -329,11 +361,15 @@ export class DiscordManager {
   async processButtonRulesAccept(interaction: ButtonInteraction) {
     console.time("[bot:manager:message] accept rules");
     try {
-      await interaction.deferReply();
+      // await interaction.deferReply();
+      // await interaction.deleteReply();
       await this.manager.recordRuleAcceptance({
         discord: { id: interaction.member.user.id },
       });
-      await interaction.editReply("Thanks for accepting our rules");
+      await interaction.followUp({
+        content: "Thanks for accepting our rules",
+        ephemeral: true,
+      });
     } catch (e) {
       throw new AppError(
         "Failed to record you accepting the rules",
@@ -353,6 +389,8 @@ export class DiscordManager {
       rego: string;
       firstname: string;
       lastname: string;
+      nickname?: string;
+      minecraftusername?: string;
     }
     const options = this.optionsArrayToObject<CommandVerifyOptions>(
       interaction.options.data
@@ -360,14 +398,35 @@ export class DiscordManager {
 
     try {
       await interaction.deferReply();
+
+      const userContext: AppUserContext = {
+        discord: { id: interaction.member.user.id },
+        fallback: { scoutMembershipNumber: options.rego },
+      };
       const extrnetDetail: MemberRecord = await this.manager.verifyExtranet(
         {
           membershipNumber: options.rego,
           firstname: options.firstname,
           lastname: options.lastname,
         },
-        { discord: { id: interaction.member.user.id } }
+        userContext
       );
+
+      if (options.nickname) {
+        await this.manager.recordDiscordNickname(
+          { nickname: options.nickname },
+          userContext
+        );
+      }
+      if (options.minecraftusername) {
+        await this.manager.linkMinecraftUsername(
+          { minecraftUsername: options.minecraftusername },
+          userContext
+        );
+      }
+
+      await this.manager.recordRuleAcceptance(userContext);
+
       await interaction.editReply(
         `Yeet, verified: ${extrnetDetail.detail.MemberStatus}, recording and linking`
       );
@@ -387,6 +446,45 @@ export class DiscordManager {
     await this.updateMember(interaction);
   }
 
+  async processCommandLinkDiscord(interaction: CommandInteraction) {
+    console.time("[bot:manager:message] link discord message");
+
+    interface CommandVerifyOptions {
+      rego: string;
+    }
+    const options = this.optionsArrayToObject<CommandVerifyOptions>(
+      interaction.options.data
+    );
+    await interaction.deferReply();
+
+    try {
+      const user = await this.manager.linkDiscordMember(
+        { membershipNumber: options.rego },
+        {
+          discord: { id: interaction.member.user.id },
+          fallback: { scoutMembershipNumber: options.rego },
+        }
+      );
+      if (user && user.scoutMember) {
+        await interaction.editReply(`verry nice, linked`);
+      } else {
+        await interaction.editReply(
+          `oh, sorry. we dont think you have verified via our website.`
+        );
+      }
+    } catch (e) {
+      throw new AppError(
+        "Failed to link you with your discord account",
+        AppErrorCode.UnknownError,
+        e
+      );
+    } finally {
+      console.timeEnd("[bot:manager:message] link discord message");
+    }
+
+    await this.updateMember(interaction);
+  }
+
   async processCommandMinecraft(interaction: CommandInteraction) {
     console.time("[bot:manager:message] mc message");
 
@@ -401,7 +499,10 @@ export class DiscordManager {
     try {
       await this.manager.linkMinecraftUsername(
         { minecraftUsername: options.username },
-        { discord: { id: interaction.member.user.id } }
+        {
+          discord: { id: interaction.member.user.id },
+          fallback: { minecraftUsername: options.username },
+        }
       );
       await interaction.editReply(`verry nice, linked`);
     } catch (e) {
@@ -557,18 +658,27 @@ export class DiscordManager {
         "Venturer",
         "Scout",
         "Verified",
+        "Verified (Legacy)",
       ];
 
       member.guild.roles.fetch();
-      member.roles.cache;
 
       const discordRolesToAdd = member.guild.roles.cache
+        // Only consider roles which we manage.
         .filter((role) => managedRoleNames.includes(role.name))
+        // Only consider roles which are currently not assigned to the user.
         .filter((role) => !member.roles.cache.has(role.id))
+        // This is a list of all roles we manage and the member doesnt have yet.
+        // Only add the ones the user should have.
         .filter((role) => roles.includes(role.name));
+
       const discordRolesToRemove = member.guild.roles.cache
+        // Only consider roles which we manage.
         .filter((role) => managedRoleNames.includes(role.name))
+        // Only consider roles which are currently assigned to the user.
         .filter((role) => member.roles.cache.has(role.id))
+        // This is a list of all roles we manage and the member does currently have.
+        // Only remove the ones the user should not have.
         .filter((role) => !roles.includes(role.name));
 
       console.log(
@@ -580,8 +690,12 @@ export class DiscordManager {
         discordRolesToRemove.map((role) => role.name)
       );
 
-      await member.roles.add(discordRolesToAdd);
-      await member.roles.remove(discordRolesToRemove);
+      if (discordRolesToAdd.size > 0) {
+        await member.roles.add(discordRolesToAdd);
+      }
+      if (discordRolesToRemove.size > 0) {
+        await member.roles.remove(discordRolesToRemove);
+      }
     } catch (e) {
       throw new AppError(
         `Failed to update Discord role 0x01`,

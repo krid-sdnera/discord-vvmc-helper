@@ -1,3 +1,4 @@
+import { AppErrorCode } from "../util/app-error";
 import { Logger } from "../util/logger";
 import { DatabaseManager, ListUsersOptions, UserEntity } from "./database";
 import { DiscordManager } from "./discord";
@@ -7,6 +8,10 @@ import { WebManager } from "./web";
 export interface AppUserContext {
   email?: string;
   discord?: { id: string };
+  fallback?: {
+    minecraftUsername?: string;
+    scoutMembershipNumber?: string;
+  };
 }
 
 export class BotManager {
@@ -98,6 +103,26 @@ export class BotManager {
     );
 
     timerEnd();
+  }
+
+  async linkDiscordMember(
+    scoutMember: { membershipNumber: string },
+    userContext: AppUserContext
+  ): Promise<UserEntity | null> {
+    const timerEnd = this.logger.time("debug", "linking scouting member");
+    try {
+      const user = await this.db.fetchUser(
+        this.resolveUserContext(userContext)
+      );
+      return user;
+    } catch (e) {
+      if (e.code === AppErrorCode.DatabaseNoResults) {
+        return null;
+      }
+      throw e;
+    } finally {
+      timerEnd();
+    }
   }
 
   async fetchRoleAndNickname(

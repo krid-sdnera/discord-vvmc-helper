@@ -37,18 +37,16 @@ export class DatabaseManager {
   async fetchUser(
     userContext: AppUserContext,
     opts?: {
-      requireAcceptedRules?: boolean;
+      /** @default true */
       createUser?: boolean;
+      /** @default true */
       updateIdentifiers?: boolean;
-      fallback?: { scoutMembershipNumber?: string };
     }
   ): Promise<UserEntity> {
     const options = Object.assign(
       {
-        requireAcceptedRules: false,
         createUser: true,
         updateIdentifiers: true,
-        fallback: {},
       },
       opts
     );
@@ -81,22 +79,79 @@ export class DatabaseManager {
           minecraftPlayer: true,
         },
       });
-    }
 
-    if (!user && options?.fallback?.scoutMembershipNumber) {
-      // Check for existing members with the same membership number linked.
-      user = await this.prisma.user.findFirst({
-        where: {
-          scoutMember: {
-            membershipNumber: options.fallback.scoutMembershipNumber,
-          },
-        },
-        include: {
-          scoutMember: true,
-          discordMember: true,
-          minecraftPlayer: true,
-        },
-      });
+      if (user && !user.scoutMember) {
+        // This record could be a duplicate. With the fallback ids, lets see if
+        // there is an existing record.
+        const conditions = [];
+        if (userContext?.fallback?.scoutMembershipNumber) {
+          conditions.push({
+            scoutMember: {
+              membershipNumber: userContext.fallback.scoutMembershipNumber,
+            },
+          });
+        }
+
+        if (userContext?.fallback?.minecraftUsername) {
+          conditions.push({
+            minecraftPlayer: {
+              some: {
+                name: userContext.fallback.minecraftUsername,
+              },
+            },
+          });
+        }
+
+        const userWithMatchingFallback: UserEntity | null =
+          await this.prisma.user.findFirst({
+            where: { OR: conditions },
+            include: {
+              scoutMember: true,
+              discordMember: true,
+              minecraftPlayer: true,
+            },
+          });
+
+        if (userWithMatchingFallback) {
+          const discordData = {
+            discordId: user.discordMember.discordId,
+            nickname: user.discordMember.nickname,
+            id: user.discordMember.id,
+          };
+
+          // Delete the mostly empty discord presence.
+          await this.prisma.user.delete({ where: { id: user.id } });
+          await this.prisma.discordMember.delete({
+            where: { id: discordData.id },
+          });
+
+          // Move the discord member to the existing user.
+          user = await this.prisma.user.update({
+            where: { id: userWithMatchingFallback.id },
+            data: {
+              discordMember: {
+                create: {
+                  discordId: discordData.discordId,
+                  nickname: discordData.nickname,
+                },
+                update: {
+                  discordId: discordData.discordId,
+                  nickname: discordData.nickname,
+                },
+              },
+              agreeToRules:
+                user.agreeToRules ||
+                userWithMatchingFallback.agreeToRules ||
+                false,
+            },
+            include: {
+              scoutMember: true,
+              discordMember: true,
+              minecraftPlayer: true,
+            },
+          });
+        }
+      }
     }
 
     if (!user && options.createUser) {
@@ -144,7 +199,7 @@ export class DatabaseManager {
       // If the user was created by email, and now has been matched by scout membership number.
       // Make sure the discord member is recorded.
       if (
-        userContext.discord?.id &&
+        userContext.discord &&
         userContext.discord.id !== user.discordMember?.discordId
       ) {
         user = await this.prisma.user.update({
@@ -185,14 +240,6 @@ export class DatabaseManager {
       }
     }
 
-    if (options.requireAcceptedRules && !user.agreeToRules) {
-      userEnd();
-      throw new AppError(
-        "User has not accpeted the rules",
-        AppErrorCode.UserDisagreesWithRules
-      );
-    }
-
     userEnd();
     return user;
   }
@@ -206,10 +253,7 @@ export class DatabaseManager {
     extrnetDetail: MemberRecord,
     userContext: AppUserContext
   ) {
-    const user = await this.fetchUser(userContext, {
-      fallback: { scoutMembershipNumber: scoutMember.membershipNumber },
-      requireAcceptedRules: false,
-    });
+    const user = await this.fetchUser(userContext);
 
     console.log(extrnetDetail);
 
@@ -242,9 +286,7 @@ export class DatabaseManager {
     minecraft: { minecraftUsername: string },
     userContext: AppUserContext
   ) {
-    const user = await this.fetchUser(userContext, {
-      requireAcceptedRules: true,
-    });
+    const user = await this.fetchUser(userContext);
 
     const userUpdateEnd = this.logger.time("debug", "Update User");
     const minecraftRecord = user.minecraftPlayer.find(
@@ -279,9 +321,7 @@ export class DatabaseManager {
   }
 
   async setDiscordNickname(nickname: string, userContext: AppUserContext) {
-    const user = await this.fetchUser(userContext, {
-      requireAcceptedRules: true,
-    });
+    const user = await this.fetchUser(userContext);
 
     const userUpdateEnd = this.logger.time("debug", "Update User");
     await this.prisma.user.update({
@@ -300,9 +340,7 @@ export class DatabaseManager {
   }
 
   async recordRuleAcceptance(userContext: AppUserContext) {
-    const user = await this.fetchUser(userContext, {
-      requireAcceptedRules: false,
-    });
+    const user = await this.fetchUser(userContext);
 
     const userUpdateEnd = this.logger.time("debug", "Update User");
     await this.prisma.user.update({
@@ -317,9 +355,7 @@ export class DatabaseManager {
   }
 
   async hasAcceptedRules(userContext: AppUserContext): Promise<boolean> {
-    const user = await this.fetchUser(userContext, {
-      requireAcceptedRules: false,
-    });
+    const user = await this.fetchUser(userContext);
 
     return user.agreeToRules;
   }

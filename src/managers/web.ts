@@ -1,6 +1,6 @@
 import { Logger } from "../util/logger";
 import express, { Express, Request, Response } from "express";
-import { BotManager } from ".";
+import { AppUserContext, BotManager } from ".";
 import { ListUsersOptions } from "./database";
 
 export class WebManager {
@@ -77,6 +77,24 @@ export class WebManager {
 
     body.push(`<div id="message"></div>`);
 
+    body.push(`
+<style type="text/css">
+  #verifyForm div {
+    padding-bottom:15px;
+  }
+  #verifyForm div label {
+    display: inline-block;
+    width: 30%;
+  }
+    
+  #verifyForm div input{
+    display: inline-block;
+    width: 66%;
+    height:1.25rem;
+  }
+</style>
+`);
+
     body.push(
       `
 <script>
@@ -99,7 +117,7 @@ window.document.forms.verifyForm.onsubmit = function(e) {
     .then(data => {
       if (data && data.success) {
         window.document.forms.verifyForm.style.display = 'none';
-        document.querySelector('#message').innerText = 'You have been verified. You can now join the VicVents minecraft server. play.vicvents-mc.ga';
+        document.querySelector('#message').innerHTML = '<p>You have been verified. You can now join the VicVents minecraft server. <code>play.vicvents-mc.tk</code></p><p>If you are also a member of our Discord Server, you can run <code>/link-discord {scout membership number}</code> to link this verification and your Discord account.</p>';
       } else {
         document.querySelector('#message').innerText = 'lol whoop, an error: ' + data.message;
       }
@@ -150,6 +168,14 @@ window.document.forms.verifyForm.onsubmit = function(e) {
       return;
     }
 
+    const userContext: AppUserContext = {
+      email: body.email,
+      fallback: {
+        minecraftUsername: body.minecraftUsername,
+        scoutMembershipNumber: body.membershipNumber,
+      },
+    };
+
     try {
       await this.manager.verifyExtranet(
         {
@@ -157,12 +183,14 @@ window.document.forms.verifyForm.onsubmit = function(e) {
           firstname: body.firstname,
           lastname: body.lastname,
         },
-        { email: body.email }
+        userContext
       );
+
+      await this.manager.recordRuleAcceptance(userContext);
 
       await this.manager.linkMinecraftUsername(
         { minecraftUsername: body.minecraftUsername },
-        { email: body.email }
+        userContext
       );
     } catch (e) {
       res.send({ success: false, message: e.message });
