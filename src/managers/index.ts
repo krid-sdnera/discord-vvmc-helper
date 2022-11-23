@@ -42,17 +42,17 @@ export class BotManager {
 
   discordIdOverride: Record<string, string> = {};
 
-  setDiscordIdRunAs(id: string, runAsId: string | null) {
+  setDiscordIdRunAs(adminId: string, runAsId: string | null) {
     if (runAsId === null) {
-      delete this.discordIdOverride[id];
+      delete this.discordIdOverride[adminId];
     } else {
-      this.discordIdOverride[id] = runAsId;
+      this.discordIdOverride[adminId] = runAsId;
     }
-    console.log("setDiscordIdRunAs", this.discordIdOverride);
+    this.logger.debug("setDiscordIdRunAs", this.discordIdOverride);
   }
 
   resolveDiscordId(id): string {
-    console.log("resolveDiscordId", this.discordIdOverride);
+    this.logger.debug("resolveDiscordId", this.discordIdOverride);
     return this.discordIdOverride[id] ?? id;
   }
 
