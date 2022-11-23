@@ -286,12 +286,6 @@ export class DatabaseManager {
     userUpdateEnd();
   }
 
-  async hasAcceptedRules(userContext: AppUserContext): Promise<boolean> {
-    const user = await this.fetchUser(userContext);
-
-    return user.agreeToRules;
-  }
-
   async listUsers(options: ListUsersOptions): Promise<UserEntity[]> {
     return await this.prisma.user.findMany({
       skip: (options.page - 1) * options.perPage,

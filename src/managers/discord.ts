@@ -338,10 +338,10 @@ export class DiscordManager {
     });
 
     try {
-      const agreeToRules = await this.manager.hasAcceptedRules({
+      const scopes = await this.manager.getScopes({
         discord: { id: interaction.member.user.id },
       });
-      if (agreeToRules) {
+      if (scopes.includes("rules:agreed")) {
         await interaction.followUp({
           content: `btw, you have already accepted the rules. thx luv ya`,
           ephemeral: true,

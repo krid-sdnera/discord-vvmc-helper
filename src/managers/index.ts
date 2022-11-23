@@ -15,6 +15,8 @@ export interface AppUserContext {
   };
 }
 
+export type AppUserScope = "extranet:verified" | "rules:agreed";
+
 export class BotManager {
   private logger: Logger;
   private db: DatabaseManager;
@@ -230,6 +232,26 @@ export class BotManager {
     return extrnetDetail;
   }
 
+  async getScopes(userContext: AppUserContext): Promise<AppUserScope[]> {
+    await this.fetchUser(userContext);
+
+    const scopes: AppUserScope[] = [];
+
+    if (userContext.user.agreeToRules) {
+      scopes.push("rules:agreed");
+    }
+
+    if (userContext.user.scoutMember) {
+      const details = userContext.user.scoutMember
+        .details as unknown as MemberRecord;
+
+      if (details?.detail?.memFlag) {
+        scopes.push("extranet:verified");
+      }
+    }
+    return scopes;
+  }
+
   async linkMinecraftUsername(
     minecraft: { minecraftUsername: string },
     userContext: AppUserContext
@@ -266,11 +288,15 @@ export class BotManager {
   async generateRoleAndNickname(
     userContext: AppUserContext
   ): Promise<{ id: string; nickname: string | null; roles: string[] }> {
-    const user = await this.db.fetchUser(this.resolveUserContext(userContext));
+    const user = await this.fetchUser(this.resolveUserContext(userContext));
 
     const roles: string[] = [];
 
-    if (user.agreeToRules && user.scoutMember) {
+    const scopes = await this.getScopes(userContext);
+    if (
+      scopes.includes("extranet:verified") &&
+      scopes.includes("rules:agreed")
+    ) {
       roles.push("Verified");
     }
 
@@ -326,10 +352,6 @@ export class BotManager {
       discord.nickname,
       this.resolveUserContext(userContext)
     );
-  }
-
-  async hasAcceptedRules(userContext: AppUserContext): Promise<boolean> {
-    return await this.db.hasAcceptedRules(this.resolveUserContext(userContext));
   }
 
   async recordRuleAcceptance(userContext: AppUserContext) {
