@@ -6,6 +6,7 @@ export enum AppErrorCode {
   UserDisagreesWithRules = "UserDisagreesWithRules",
   UserCreationFailed = "UserCreationFailed",
   UnknownError = "UnknownError",
+  UserNotFound = "UserNotFound",
 }
 
 export class AppError extends Error {
