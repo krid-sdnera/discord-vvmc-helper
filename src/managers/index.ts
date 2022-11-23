@@ -125,7 +125,7 @@ export class BotManager {
     }
   }
 
-  async fetchRoleAndNickname(
+  async generateRoleAndNickname(
     userContext: AppUserContext
   ): Promise<{ id: string; nickname: string | null; roles: string[] }> {
     const user = await this.db.fetchUser(this.resolveUserContext(userContext));
@@ -155,12 +155,12 @@ export class BotManager {
 
     return {
       id: this.resolveDiscordId(userContext.discord.id),
-      nickname: this.getNickname(user),
+      nickname: this.generateNickname(user),
       roles,
     };
   }
 
-  getNickname(user: UserEntity): string | null {
+  generateNickname(user: UserEntity): string | null {
     const nickname: string[] = [];
 
     if (user.discordMember?.nickname) {

@@ -380,7 +380,12 @@ export class DiscordManager {
       console.timeEnd("[bot:manager:message] accept rules");
     }
 
-    await this.updateMember(interaction);
+    await this.updateMember(
+      {
+        discord: { id: interaction.member.user.id },
+      },
+      interaction
+    );
   }
 
   async processCommandVerify(interaction: CommandInteraction) {
@@ -443,7 +448,12 @@ export class DiscordManager {
     } finally {
       console.timeEnd("[bot:manager:message] verify message");
     }
-    await this.updateMember(interaction);
+    await this.updateMember(
+      {
+        discord: { id: interaction.member.user.id },
+      },
+      interaction
+    );
   }
 
   async processCommandLinkDiscord(interaction: CommandInteraction) {
@@ -482,7 +492,12 @@ export class DiscordManager {
       console.timeEnd("[bot:manager:message] link discord message");
     }
 
-    await this.updateMember(interaction);
+    await this.updateMember(
+      {
+        discord: { id: interaction.member.user.id },
+      },
+      interaction
+    );
   }
 
   async processCommandMinecraft(interaction: CommandInteraction) {
@@ -519,7 +534,12 @@ export class DiscordManager {
       console.timeEnd("[bot:manager:message] mc message");
     }
 
-    await this.updateMember(interaction);
+    await this.updateMember(
+      {
+        discord: { id: interaction.member.user.id },
+      },
+      interaction
+    );
   }
 
   async processCommandNickname(interaction: CommandInteraction) {
@@ -552,7 +572,12 @@ export class DiscordManager {
       console.timeEnd("[bot:manager:message] nickname message");
     }
 
-    await this.updateMember(interaction);
+    await this.updateMember(
+      {
+        discord: { id: interaction.member.user.id },
+      },
+      interaction
+    );
   }
 
   async processCommandRunAs(interaction: CommandInteraction) {
@@ -573,15 +598,21 @@ export class DiscordManager {
     console.timeEnd("[bot:manager:message] run as message");
   }
 
-  async updateMember(interaction: ButtonInteraction | CommandInteraction) {
+  async updateMember(
+    userContext: AppUserContext,
+    interaction?: ButtonInteraction | CommandInteraction
+  ) {
     console.time("[bot:manager:member] update nickname");
 
-    const { id, nickname, roles } = await this.manager.fetchRoleAndNickname({
-      discord: { id: interaction.member.user.id },
-    });
+    const { id, nickname, roles } = await this.manager.generateRoleAndNickname(
+      userContext
+    );
 
-    let member = interaction.member;
-    if (id !== member.user.id) {
+    let member: GuildMember;
+
+    if (interaction && id === interaction.member.user.id) {
+      member = interaction.member as GuildMember;
+    } else {
       member = await interaction.guild.members.fetch({ user: id });
     }
 
@@ -591,12 +622,16 @@ export class DiscordManager {
       } catch (e) {
         console.log(`failed to update nickname: "${nickname}"`);
 
-        await interaction.followUp({
-          content:
-            "I don't have permission to change your nickname!" +
-            this.makeError(e),
-          ephemeral: true,
-        });
+        if (interaction) {
+          await interaction.followUp({
+            content:
+              "I don't have permission to change your nickname!" +
+              this.makeError(e),
+            ephemeral: true,
+          });
+        } else {
+          throw e;
+        }
       }
     }
 
@@ -606,18 +641,21 @@ export class DiscordManager {
     } catch (e) {
       console.log(`failed to update roles: "${JSON.stringify(roles)}"`);
 
-      await interaction.followUp({
-        content:
-          "I don't have permission to change your roles!" + this.makeError(e),
-        ephemeral: true,
-      });
+      if (interaction) {
+        await interaction.followUp({
+          content:
+            "I don't have permission to change your roles!" + this.makeError(e),
+          ephemeral: true,
+        });
+      } else {
+        throw e;
+      }
     }
 
     console.timeEnd("[bot:manager:member] update nickname");
   }
 
   async updateNickname(member: GuildMember, nickname: string) {
-    let code = "";
     try {
       if (!member.guild.me.permissions.has("CHANGE_NICKNAME", true)) {
         throw new AppError(
