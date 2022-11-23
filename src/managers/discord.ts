@@ -461,6 +461,8 @@ export class DiscordManager {
 
     interface CommandVerifyOptions {
       rego: string;
+      // TODO: Add code arg to /discord-link command
+      // code: string;
     }
     const options = this.optionsArrayToObject<CommandVerifyOptions>(
       interaction.options.data
